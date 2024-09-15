@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -11,6 +12,16 @@ import modules.globals
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Deep Live Cam Server')
+parser.add_argument('--execution-provider', type=str, default='cpu', choices=['cpu', 'cuda'],
+                    help='Execution provider (default: cpu)')
+args = parser.parse_args()
+
+# Set the execution provider
+modules.globals.execution_providers = [args.execution_provider]
+logger.info(f"Using execution provider: {args.execution_provider}")
 
 app = FastAPI()
 
