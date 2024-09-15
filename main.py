@@ -2,6 +2,8 @@ import os
 import argparse
 import asyncio
 import logging
+import time
+from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
@@ -57,26 +59,29 @@ modules.globals.frame_processors = ['face_swapper', 'face_enhancer']
 frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
 logger.info(f"Initialized frame processors: {[fp.NAME for fp in frame_processors]}")
 
+# FPS calculation
+FPS_WINDOW = 30  # Calculate FPS over this many frames
+frame_times = deque(maxlen=FPS_WINDOW)
+
 @app.websocket("/ws/video")
 async def websocket_endpoint(websocket: WebSocket):
     try:
         await websocket.accept()
         logger.info("WebSocket connection accepted")
         frame_count = 0
+        last_fps_log_time = time.time()
         while True:
+            start_time = time.time()
+            
             data = await websocket.receive_bytes()
             frame_count += 1
-            logger.info(f"Received frame {frame_count} of size: {len(data)} bytes")
             
             # Convert bytes to numpy array
             nparr = np.frombuffer(data, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            logger.info(f"Frame {frame_count} decoded, shape: {frame.shape}")
             
             # Process the frame
-            logger.info(f"Processing frame {frame_count}")
             processed_frame = process_frame(frame, frame_count)
-            logger.info(f"Frame {frame_count} processed")
             
             # Convert processed frame back to bytes
             _, buffer = cv2.imencode('.jpg', processed_frame)
@@ -84,7 +89,16 @@ async def websocket_endpoint(websocket: WebSocket):
             
             # Send processed frame back to client
             await websocket.send_bytes(processed_data)
-            logger.info(f"Sent processed frame {frame_count} back to client")
+            
+            # Calculate and log FPS
+            end_time = time.time()
+            frame_times.append(end_time - start_time)
+            
+            if end_time - last_fps_log_time >= 5:  # Log FPS every 5 seconds
+                fps = len(frame_times) / sum(frame_times)
+                logger.info(f"Processed {frame_count} frames. Current FPS: {fps:.2f}")
+                last_fps_log_time = end_time
+            
     except WebSocketDisconnect:
         logger.info("Client disconnected")
     except Exception as e:
@@ -92,9 +106,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 def process_frame(frame, frame_count):
     for i, frame_processor in enumerate(frame_processors):
-        logger.info(f"Applying {frame_processor.NAME} to frame {frame_count}")
+        logger.debug(f"Applying {frame_processor.NAME} to frame {frame_count}")
         frame = frame_processor.process_frame(source_face, frame)
-        logger.info(f"Applied {frame_processor.NAME} to frame {frame_count}")
+        logger.debug(f"Applied {frame_processor.NAME} to frame {frame_count}")
     return frame
 
 # Add this at the end of the file
