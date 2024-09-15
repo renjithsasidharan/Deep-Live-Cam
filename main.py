@@ -55,13 +55,55 @@ except Exception as e:
     source_face = None
 
 # Set up frame processors
-modules.globals.frame_processors = ['face_swapper', 'face_enhancer']
+# modules.globals.frame_processors = ['face_swapper', 'face_enhancer']
+modules.globals.frame_processors = ['face_swapper']
 frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
 logger.info(f"Initialized frame processors: {[fp.NAME for fp in frame_processors]}")
 
 # FPS calculation
 FPS_WINDOW = 30  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
+
+def time_function(func):
+    async def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
+        end_time = time.time()
+        logger.info(f"{func.__name__} took {end_time - start_time:.4f} seconds")
+        return result
+    return wrapper
+
+FRAME_WIDTH = 320*2
+FRAME_HEIGHT = 240*2
+
+@time_function
+async def receive_frame(websocket):
+    data = await websocket.receive_bytes()
+    nparr = np.frombuffer(data, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    return frame
+
+@time_function
+async def process_frame(frame, frame_count):
+    # Ensure the frame is the expected size
+    if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
+        frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+    
+    for frame_processor in frame_processors:
+        start_time = time.time()
+        frame = frame_processor.process_frame(source_face, frame)
+        end_time = time.time()
+        logger.info(f"{frame_processor.NAME} took {end_time - start_time:.4f} seconds")
+    return frame
+
+@time_function
+async def send_frame(websocket, frame):
+    # Ensure the frame is the expected size before sending
+    if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
+        frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+    _, buffer = cv2.imencode('.jpg', frame)
+    processed_data = buffer.tobytes()
+    await websocket.send_bytes(processed_data)
 
 @app.websocket("/ws/video")
 async def websocket_endpoint(websocket: WebSocket):
@@ -71,45 +113,27 @@ async def websocket_endpoint(websocket: WebSocket):
         frame_count = 0
         last_fps_log_time = time.time()
         while True:
-            start_time = time.time()
+            overall_start_time = time.time()
             
-            data = await websocket.receive_bytes()
+            frame = await receive_frame(websocket)
             frame_count += 1
             
-            # Convert bytes to numpy array
-            nparr = np.frombuffer(data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            processed_frame = await process_frame(frame, frame_count)
             
-            # Process the frame
-            processed_frame = process_frame(frame, frame_count)
+            await send_frame(websocket, processed_frame)
             
-            # Convert processed frame back to bytes
-            _, buffer = cv2.imencode('.jpg', processed_frame)
-            processed_data = buffer.tobytes()
+            overall_end_time = time.time()
+            frame_times.append(overall_end_time - overall_start_time)
             
-            # Send processed frame back to client
-            await websocket.send_bytes(processed_data)
-            
-            # Calculate and log FPS
-            end_time = time.time()
-            frame_times.append(end_time - start_time)
-            
-            if end_time - last_fps_log_time >= 5:  # Log FPS every 5 seconds
+            if overall_end_time - last_fps_log_time >= 5:  # Log FPS every 5 seconds
                 fps = len(frame_times) / sum(frame_times)
                 logger.info(f"Processed {frame_count} frames. Current FPS: {fps:.2f}")
-                last_fps_log_time = end_time
+                last_fps_log_time = overall_end_time
             
     except WebSocketDisconnect:
         logger.info("Client disconnected")
     except Exception as e:
         logger.error(f"WebSocket connection error: {e}")
-
-def process_frame(frame, frame_count):
-    for i, frame_processor in enumerate(frame_processors):
-        logger.debug(f"Applying {frame_processor.NAME} to frame {frame_count}")
-        frame = frame_processor.process_frame(source_face, frame)
-        logger.debug(f"Applied {frame_processor.NAME} to frame {frame_count}")
-    return frame
 
 # Add this at the end of the file
 if __name__ == "__main__":
