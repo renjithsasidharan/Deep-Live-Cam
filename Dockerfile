@@ -13,11 +13,14 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+# RUN  apt-get install g++
+# RUN sudo apt-get install libgl1-mesa-glx
+
 # Set Python 3.10 as the default python
 RUN ln -s /usr/bin/python3.10 /usr/bin/python
 
 # Clone the repository
-RUN git clone https://github.com/hacksider/Deep-Live-Cam.git .
+RUN git clone https://github.com/renjithsasidharan/Deep-Live-Cam.git .
 
 # Download models
 RUN mkdir -p models && \
@@ -38,4 +41,4 @@ EXPOSE 8000
 ENV EXECUTION_PROVIDER=cuda
 
 # Run main.py when the container launches, using the specified execution provider
-CMD python run.py --execution-provider $EXECUTION_PROVIDER
+CMD python main.py --execution-provider $EXECUTION_PROVIDER
