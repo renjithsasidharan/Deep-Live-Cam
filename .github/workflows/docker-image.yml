@@ -9,13 +9,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
     - name: Delete huge unnecessary tools folder
       run: rm -rf /opt/hostedtoolcache
 
     - uses: actions/checkout@v4
 
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag deep-live-cam:$(date +%s)
+    - name: Log in to Docker Hub
+      run: echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
 
+    - name: Build the Docker image
+      run: docker build . --file Dockerfile --tag username/deep-live-cam:$(date +%s)
+
+    - name: Push Docker image to Docker Hub
+      run: docker push username/deep-live-cam:$(date +%s)
