@@ -64,6 +64,10 @@ logger.info(f"Initialized frame processors: {[fp.NAME for fp in frame_processors
 FPS_WINDOW = 30  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
 
+FRAME_WIDTH = 320*2
+FRAME_HEIGHT = 240*2
+PIPELINE_SIZE = 5  # Number of frames to process in parallel
+
 def time_function(func):
     async def wrapper(*args, **kwargs):
         start_time = time.time()
@@ -73,9 +77,6 @@ def time_function(func):
         return result
     return wrapper
 
-FRAME_WIDTH = 320*2
-FRAME_HEIGHT = 240*2
-
 @time_function
 async def receive_frame(websocket):
     data = await websocket.receive_bytes()
@@ -84,21 +85,23 @@ async def receive_frame(websocket):
     return frame
 
 @time_function
-async def process_frame(frame, frame_count):
-    # Ensure the frame is the expected size
-    if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
-        frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
-    
-    for frame_processor in frame_processors:
-        start_time = time.time()
-        frame = frame_processor.process_frame(source_face, frame)
-        end_time = time.time()
-        logger.info(f"{frame_processor.NAME} took {end_time - start_time:.4f} seconds")
-    return frame
+async def process_frames(frames, frame_counts):
+    processed_frames = []
+    for frame, count in zip(frames, frame_counts):
+        if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
+            frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+        
+        for frame_processor in frame_processors:
+            start_time = time.time()
+            frame = frame_processor.process_frame(source_face, frame)
+            end_time = time.time()
+            logger.info(f"{frame_processor.NAME} for frame {count} took {end_time - start_time:.4f} seconds")
+        
+        processed_frames.append(frame)
+    return processed_frames
 
 @time_function
 async def send_frame(websocket, frame):
-    # Ensure the frame is the expected size before sending
     if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
         frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
     _, buffer = cv2.imencode('.jpg', frame)
@@ -112,24 +115,46 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("WebSocket connection accepted")
         frame_count = 0
         last_fps_log_time = time.time()
-        while True:
-            overall_start_time = time.time()
-            
+        frame_times = deque(maxlen=30)  # Store the last 30 frame times for FPS calculation
+
+        # Initialize the pipeline
+        pipeline = []
+        for _ in range(PIPELINE_SIZE):
             frame = await receive_frame(websocket)
             frame_count += 1
+            pipeline.append((frame, frame_count))
+
+        while True:
+            # Process the batch of frames
+            frames, counts = zip(*pipeline)
+            process_task = asyncio.create_task(process_frames(frames, counts))
+
+            # Start receiving new frames to refill the pipeline
+            receive_tasks = [asyncio.create_task(receive_frame(websocket)) for _ in range(PIPELINE_SIZE)]
+
+            # Wait for the current batch to finish processing
+            processed_frames = await process_task
             
-            processed_frame = await process_frame(frame, frame_count)
-            
-            await send_frame(websocket, processed_frame)
-            
-            overall_end_time = time.time()
-            frame_times.append(overall_end_time - overall_start_time)
-            
-            if overall_end_time - last_fps_log_time >= 5:  # Log FPS every 5 seconds
-                fps = len(frame_times) / sum(frame_times)
-                logger.info(f"Processed {frame_count} frames. Current FPS: {fps:.2f}")
-                last_fps_log_time = overall_end_time
-            
+            # Send processed frames and refill the pipeline
+            pipeline = []
+            for i, processed_frame in enumerate(processed_frames):
+                send_task = asyncio.create_task(send_frame(websocket, processed_frame))
+                new_frame = await receive_tasks[i]
+                frame_count += 1
+                pipeline.append((new_frame, frame_count))
+                await send_task
+
+            # Calculate and log FPS
+            current_time = time.time()
+            frame_times.append(current_time)
+            if current_time - last_fps_log_time >= 5:
+                if len(frame_times) > 1:
+                    fps = (len(frame_times) - 1) * PIPELINE_SIZE / (frame_times[-1] - frame_times[0])
+                    logger.info(f"Processed {frame_count} frames. Current FPS: {fps:.2f}")
+                last_fps_log_time = current_time
+                frame_times.clear()
+                frame_times.append(current_time)
+
     except WebSocketDisconnect:
         logger.info("Client disconnected")
     except Exception as e:
