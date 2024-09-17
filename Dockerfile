@@ -23,12 +23,10 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     python3-tk \
     tzdata \
+    vim \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && dpkg-reconfigure --frontend noninteractive tzdata \
     && rm -rf /var/lib/apt/lists/*
-
-# Install vim
-RUN apt-get install -y vim
 
 # Set Python 3.10 as the default python
 RUN ln -s /usr/bin/python3.10 /usr/bin/python
