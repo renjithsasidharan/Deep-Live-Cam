@@ -37,7 +37,7 @@ RUN git clone https://github.com/renjithsasidharan/Deep-Live-Cam.git .
 # Download models
 RUN mkdir -p models && \
     wget -O models/GFPGANv1.4.pth https://huggingface.co/hacksider/deep-live-cam/resolve/main/GFPGANv1.4.pth && \
-    wget -O models/inswapper_128_fp16.onnx https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128_fp16.onnx
+    wget -O models/inswapper_128.onnx https://huggingface.co/hacksider/deep-live-cam/resolve/main/inswapper_128.onnx
 
 # Install Python dependencies
 RUN pip3 install --no-cache-dir -r requirements.txt

@@ -64,8 +64,8 @@ logger.info(f"Initialized frame processors: {[fp.NAME for fp in frame_processors
 FPS_WINDOW = 30  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
 
-FRAME_WIDTH = 320*2
-FRAME_HEIGHT = 240*2
+FRAME_WIDTH = 128
+FRAME_HEIGHT = 128
 WEBSOCKET_TIMEOUT = 60  # Increase timeout to 60 seconds
 
 def time_function(func):
