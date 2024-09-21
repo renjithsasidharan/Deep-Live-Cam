@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
@@ -12,6 +12,9 @@ from modules.processors.frame.core import get_frame_processors_modules
 from modules.face_analyser import get_one_face
 import modules.globals
 from modules.core import encode_execution_providers, decode_execution_providers
+from pydantic import BaseModel
+import base64
+from fastapi.responses import JSONResponse
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +44,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Store current source image
+CURRENT_SOURCE_IMAGE = None
+
 # Load the source image
 SOURCE_IMAGE_PATH = os.path.join(os.path.dirname(__file__), args.source_image)
 try:
@@ -54,18 +60,17 @@ except Exception as e:
     logger.error(f"Error loading source image: {e}")
     source_face = None
 
-# Set up frame processors
-modules.globals.frame_processors = ['face_swapper', 'face_enhancer']
-# modules.globals.frame_processors = ['face_swapper']
-frame_processors = get_frame_processors_modules(modules.globals.frame_processors)
-logger.info(f"Initialized frame processors: {[fp.NAME for fp in frame_processors]}")
+# Load all available frame processors once
+ALL_FRAME_PROCESSORS = ['face_swapper', 'face_enhancer']
+ALL_FRAME_PROCESSOR_MODULES = get_frame_processors_modules(ALL_FRAME_PROCESSORS)
+ACTIVE_FRAME_PROCESSORS = ['DLC.FACE-SWAPPER']  # Initially active processors
 
 # FPS calculation
 FPS_WINDOW = 30  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
 
-FRAME_WIDTH = 128
-FRAME_HEIGHT = 128
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
 WEBSOCKET_TIMEOUT = 60  # Increase timeout to 60 seconds
 
 def time_function(func):
@@ -90,16 +95,17 @@ async def receive_frame(websocket):
 
 @time_function
 async def process_frame(frame, frame_count):
-    if frame is None:
+    if frame is None or CURRENT_SOURCE_IMAGE is None:
         return None
     if frame.shape[0] != FRAME_HEIGHT or frame.shape[1] != FRAME_WIDTH:
         frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
     
-    for frame_processor in frame_processors:
-        start_time = time.time()
-        frame = frame_processor.process_frame(source_face, frame)
-        end_time = time.time()
-        logger.info(f"{frame_processor.NAME} for frame {frame_count} took {end_time - start_time:.4f} seconds")
+    for frame_processor in ALL_FRAME_PROCESSOR_MODULES:
+        if frame_processor.NAME in ACTIVE_FRAME_PROCESSORS:
+            start_time = time.time()
+            frame = frame_processor.process_frame(CURRENT_SOURCE_IMAGE["face"], frame)
+            end_time = time.time()
+            logger.info(f"{frame_processor.NAME} for frame {frame_count} took {end_time - start_time:.4f} seconds")
     
     return frame
 
@@ -176,6 +182,52 @@ async def add_websocket_timeout(request, call_next):
     response = await call_next(request)
     return response
 
+class Config(BaseModel):
+    frame_processors: list[str]
+
+@app.post("/set_config")
+async def set_config(config: Config):
+    global ACTIVE_FRAME_PROCESSORS
+    try:
+        # Validate frame processors
+        valid_processors = {'face_swapper': 'DLC.FACE-SWAPPER', 'face_enhancer': 'DLC.FACE-ENHANCER'}
+        active_processors = []
+        for processor in config.frame_processors:
+            if processor not in valid_processors:
+                raise ValueError(f"Invalid frame processor: {processor}")
+            active_processors.append(valid_processors[processor])
+        
+        # Update active frame processors
+        ACTIVE_FRAME_PROCESSORS = active_processors
+        logger.info(f"Updated active frame processors: {ACTIVE_FRAME_PROCESSORS}")
+        
+        return {"message": "Configuration updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/set_source_image")
+async def set_source_image(file: UploadFile = File(...)):
+    global CURRENT_SOURCE_IMAGE
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    face = get_one_face(img)
+    if face is None:
+        return JSONResponse(content={"error": "No face detected in the image"}, status_code=400)
+    
+    CURRENT_SOURCE_IMAGE = {
+        "image": img,
+        "face": face
+    }
+    
+    _, buffer = cv2.imencode('.jpg', img)
+    base64_image = base64.b64encode(buffer).decode('utf-8')
+    
+    return {"message": "Source image updated successfully", "image": base64_image}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=WEBSOCKET_TIMEOUT)
+
+# python main.py --execution-provider cuda
