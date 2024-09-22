@@ -15,6 +15,8 @@ from modules.core import encode_execution_providers, decode_execution_providers
 from pydantic import BaseModel
 import base64
 from fastapi.responses import JSONResponse
+from asyncio import Queue
+import json
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -64,13 +66,14 @@ except Exception as e:
 ALL_FRAME_PROCESSORS = ['face_swapper', 'face_enhancer']
 ALL_FRAME_PROCESSOR_MODULES = get_frame_processors_modules(ALL_FRAME_PROCESSORS)
 ACTIVE_FRAME_PROCESSORS = ['DLC.FACE-SWAPPER']  # Initially active processors
+MAINTAIN_FPS = False
 
 # FPS calculation
 FPS_WINDOW = 30  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
 
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+FRAME_WIDTH = 320
+FRAME_HEIGHT = 240
 WEBSOCKET_TIMEOUT = 60  # Increase timeout to 60 seconds
 
 def time_function(func):
@@ -117,46 +120,104 @@ async def send_frame(websocket, frame):
     processed_data = buffer.tobytes()
     await websocket.send_bytes(processed_data)
 
+class Config(BaseModel):
+    frame_processors: list[str]
+    maintain_fps: bool = False  # Configuration option
+
+@app.post("/set_config")
+async def set_config(config: Config):
+    global ACTIVE_FRAME_PROCESSORS, MAINTAIN_FPS
+    try:
+        # Validate frame processors
+        valid_processors = {'face_swapper': 'DLC.FACE-SWAPPER', 'face_enhancer': 'DLC.FACE-ENHANCER'}
+        active_processors = []
+        for processor in config.frame_processors:
+            if processor not in valid_processors:
+                raise ValueError(f"Invalid frame processor: {processor}")
+            active_processors.append(valid_processors[processor])
+        
+        # Update active frame processors and FPS maintenance setting
+        ACTIVE_FRAME_PROCESSORS = active_processors
+        MAINTAIN_FPS = config.maintain_fps
+        
+        logger.info(f"Updated active frame processors: {ACTIVE_FRAME_PROCESSORS}")
+        logger.info(f"Maintain FPS: {MAINTAIN_FPS}")
+        
+        return {"message": "Configuration updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.websocket("/ws/video")
 async def websocket_endpoint(websocket: WebSocket):
     try:
         await websocket.accept()
         logger.info("WebSocket connection accepted")
         frame_count = 0
-        last_fps_log_time = time.time()
         frame_times = deque(maxlen=30)  # Store the last 30 frame times for FPS calculation
-        last_processed_time = time.time()
+        frame_queue = Queue(maxsize=1)  # Queue to hold frames
 
-        next_frame = await receive_frame(websocket)
-        while True:
-            start_time = time.time()
+        async def receive_frames():
+            while True:
+                try:
+                    frame = await receive_frame(websocket)
+                    if MAINTAIN_FPS:
+                        await frame_queue.put(frame)
+                    else:
+                        # If not maintaining FPS, clear the queue and put the latest frame
+                        while not frame_queue.empty():
+                            try:
+                                frame_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                        await frame_queue.put(frame)
+                except Exception as e:
+                    logger.error(f"Error in receive_frames: {e}")
+                    break
 
-            # Start processing next frame
-            process_task = asyncio.create_task(process_frame(next_frame, frame_count))
-            
-            # Receive next frame while processing current frame
-            next_frame = await receive_frame(websocket)
-            
-            # Wait for processing to complete and send the frame
-            processed_frame = await process_task
-            await send_frame(websocket, processed_frame)
+        async def process_frames():
+            nonlocal frame_count
+            last_fps_log_time = time.time()
+            while True:
+                try:
+                    start_time = time.time()
 
-            frame_count += 1
+                    frame = await frame_queue.get()
+                    processed_frame = await process_frame(frame, frame_count)
+                    await send_frame(websocket, processed_frame)
+                    frame_count += 1
 
-            # Calculate and log FPS
-            end_time = time.time()
-            frame_times.append(end_time - start_time)
-            if end_time - last_fps_log_time >= 5:
-                if len(frame_times) > 1:
-                    fps = len(frame_times) / sum(frame_times)
-                    logger.info(f"Processed {frame_count} frames. Current FPS: {fps:.2f}")
-                last_fps_log_time = end_time
-                frame_times.clear()
+                    # Calculate and log FPS
+                    end_time = time.time()
+                    frame_times.append(end_time - start_time)
+                    if end_time - last_fps_log_time >= 1:  # Send FPS every second
+                        if len(frame_times) > 1:
+                            fps = len(frame_times) / sum(frame_times)
+                            logger.info(f"Processed {frame_count} frames. Current FPS: {fps:.2f}")
+                            # Send FPS to frontend
+                            await websocket.send_text(json.dumps({"fps": round(fps, 2)}))
+                        last_fps_log_time = end_time
+                        frame_times.clear()
 
-            # Implement frame skipping if processing is falling behind
-            if end_time - last_processed_time < 0.1:  # Aim for max 10 FPS
-                await asyncio.sleep(0.1 - (end_time - last_processed_time))
-            last_processed_time = end_time
+                    if not MAINTAIN_FPS:
+                        await asyncio.sleep(0.1)  # Add a small delay when not maintaining FPS
+
+                except Exception as e:
+                    logger.error(f"Error in process_frames: {e}")
+                    break
+
+        # Start both tasks
+        receive_task = asyncio.create_task(receive_frames())
+        process_task = asyncio.create_task(process_frames())
+
+        # Wait for both tasks to complete
+        done, pending = await asyncio.wait(
+            [receive_task, process_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # Cancel any pending tasks
+        for task in pending:
+            task.cancel()
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
@@ -181,29 +242,6 @@ async def add_websocket_timeout(request, call_next):
         request.state.websocket_timeout = WEBSOCKET_TIMEOUT
     response = await call_next(request)
     return response
-
-class Config(BaseModel):
-    frame_processors: list[str]
-
-@app.post("/set_config")
-async def set_config(config: Config):
-    global ACTIVE_FRAME_PROCESSORS
-    try:
-        # Validate frame processors
-        valid_processors = {'face_swapper': 'DLC.FACE-SWAPPER', 'face_enhancer': 'DLC.FACE-ENHANCER'}
-        active_processors = []
-        for processor in config.frame_processors:
-            if processor not in valid_processors:
-                raise ValueError(f"Invalid frame processor: {processor}")
-            active_processors.append(valid_processors[processor])
-        
-        # Update active frame processors
-        ACTIVE_FRAME_PROCESSORS = active_processors
-        logger.info(f"Updated active frame processors: {ACTIVE_FRAME_PROCESSORS}")
-        
-        return {"message": "Configuration updated successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/set_source_image")
 async def set_source_image(file: UploadFile = File(...)):
