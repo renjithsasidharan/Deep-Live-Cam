@@ -1,8 +1,8 @@
 # Use NVIDIA CUDA 11.8 runtime as the base image
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
-RUN sudo rm -rf "/usr/local/share/boost"
-RUN sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+RUN rm -rf "/usr/local/share/boost"
+RUN rm -rf "$AGENT_TOOLSDIRECTORY"
 
 # Set the working directory in the container
 WORKDIR /app
