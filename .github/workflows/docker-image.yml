@@ -10,20 +10,34 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Delete huge unnecessary tools folder
-      run: rm -rf /opt/hostedtoolcache
-
-    - uses: actions/checkout@v4
-
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/local/.ghcup
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /usr/local/lib/android/sdk/ndk
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/boost
+        sudo rm -rf /opt/hostedtoolcache
+        
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
     - name: Set up timestamp
       id: timestamp
       run: echo "TIMESTAMP=$(date +%s)" >> $GITHUB_ENV
-
+      
     - name: Log in to Docker Hub
       run: echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
-
+      
     - name: Build the Docker image
       run: docker build . --file Dockerfile --tag renjithks/deep-live-cam:${{ env.TIMESTAMP }}
-
+      
     - name: Push Docker image to Docker Hub
       run: docker push renjithks/deep-live-cam:${{ env.TIMESTAMP }}
+      
+    - name: Check disk usage
+      run: df -h
+      
+    - name: Check directory sizes
+      run: du -sh /usr/local/* /opt/* /usr/* | sort -hr
