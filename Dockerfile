@@ -1,21 +1,20 @@
 # Use NVIDIA CUDA 11.8 runtime as the base image
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
-RUN rm -rf "/usr/local/share/boost"
-RUN rm -rf "$AGENT_TOOLSDIRECTORY"
+# Remove potentially unnecessary directories (be cautious with this)
+RUN rm -rf "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Set environment variable to non-interactive (this prevents prompts)
+# Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Set the timezone
 ENV TZ=Etc/UTC
 
+# Configure apt
 RUN echo 'Acquire::https::developer.download.nvidia.com::Verify-Peer "false";' | tee -a /etc/apt/apt.conf
 
-# Install system dependencies
+# Install system dependencies and clean up in one layer
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
@@ -27,9 +26,11 @@ RUN apt-get update && apt-get install -y \
     python3-tk \
     tzdata \
     vim \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
-    && dpkg-reconfigure --frontend noninteractive tzdata \
-    && rm -rf /var/lib/apt/lists/*
+ && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+ && dpkg-reconfigure --frontend noninteractive tzdata \
+ && apt-get autoremove -y \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
 # Set Python 3.10 as the default python
 RUN ln -s /usr/bin/python3.10 /usr/bin/python
@@ -49,7 +50,7 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 RUN pip3 uninstall -y onnxruntime onnxruntime-gpu && \
     pip3 install --no-cache-dir onnxruntime-gpu==1.16.3
 
-# Make port 8000 available to the world outside this container
+# Expose port 8000
 EXPOSE 8000
 
 # Set CUDA related environment variables
