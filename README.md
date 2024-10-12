@@ -371,11 +371,11 @@ For the latest experimental builds and features, see the [experimental branch](h
 
 **TODO:**
 
-- [x] Support multiple faces 
 - [ ] Develop a version for web app/service
-- [ ] UI/UX enhancements for desktop app
 - [ ] Speed up model loading
 - [ ] Speed up real-time face swapping
+- [x] Support multiple faces 
+- [x] UI/UX enhancements for desktop app
 
 This is an open-source project developed in our free time. Updates may be delayed.
 
@@ -392,9 +392,14 @@ This is an open-source project developed in our free time. Updates may be delaye
 - and [all developers](https://github.com/hacksider/Deep-Live-Cam/graphs/contributors) behind libraries used in this project.
 - Foot Note: [This is originally roop-cam, see the full history of the code here.](https://github.com/hacksider/roop-cam) Please be informed that the base author of the code is [s0md3v](https://github.com/s0md3v/roop)
 
-## Thanks to all the contributors
-<a href="https://github.com/hacksider/Deep-Live-Cam/graphs/contributors" target="_blank">
-  <img src="https://contrib.rocks/image?repo=hacksider/Deep-Live-Cam" />
-</a>
-
+## Contributions
 ![Alt](https://repobeats.axiom.co/api/embed/fec8e29c45dfdb9c5916f3a7830e1249308d20e1.svg "Repobeats analytics image")
+## Star History
+
+<a href="https://star-history.com/#hacksider/deep-live-cam&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hacksider/deep-live-cam&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hacksider/deep-live-cam&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=hacksider/deep-live-cam&type=Date" />
+ </picture>
+</a>
