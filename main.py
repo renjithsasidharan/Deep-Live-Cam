@@ -8,10 +8,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
-from modules.processors.frame.core import get_frame_processors_modules
+from modules.processors.frame.core import get_frame_processors_modules, load_frame_processor_module
 from modules.face_analyser import get_one_face
 import modules.globals
-from modules.core import encode_execution_providers, decode_execution_providers
+from modules.core import encode_execution_providers, decode_execution_providers, suggest_execution_threads, suggest_max_memory
 from pydantic import BaseModel
 import base64
 from fastapi.responses import JSONResponse
@@ -27,12 +27,16 @@ parser = argparse.ArgumentParser(description='Deep Live Cam Server')
 parser.add_argument('--execution-provider', type=str, default='cpu',
                     choices=encode_execution_providers(['CPUExecutionProvider', 'CUDAExecutionProvider', 'CoreMLExecutionProvider']),
                     help='Execution provider (default: cpu)')
-parser.add_argument('--source-image', type=str, default='srk.jpg',
+parser.add_argument('--source-image', type=str, default='srk.jpg',  
                     help='Path to the source image (default: srk.jpg)')
+parser.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=suggest_execution_threads())
+parser.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=suggest_max_memory())
 args = parser.parse_args()
 
 # Set the execution provider
 modules.globals.execution_providers = decode_execution_providers([args.execution_provider])
+modules.globals.execution_threads = args.execution_threads
+modules.globals.max_memory = args.max_memory
 logger.info(f"Using execution provider: {modules.globals.execution_providers}")
 
 app = FastAPI()
@@ -64,16 +68,20 @@ except Exception as e:
 
 # Load all available frame processors once
 ALL_FRAME_PROCESSORS = ['face_swapper', 'face_enhancer']
-ALL_FRAME_PROCESSOR_MODULES = get_frame_processors_modules(ALL_FRAME_PROCESSORS)
-ACTIVE_FRAME_PROCESSORS = ['DLC.FACE-SWAPPER']  # Initially active processors
+ALL_FRAME_PROCESSOR_MODULES  =[]
+for frame_processor in ALL_FRAME_PROCESSORS:
+    ALL_FRAME_PROCESSOR_MODULES.append(load_frame_processor_module(frame_processor))
+# ALL_FRAME_PROCESSOR_MODULES = get_frame_processors_modules(ALL_FRAME_PROCESSORS)
+print(f'ALL_FRAME_PROCESSOR_MODULES: {ALL_FRAME_PROCESSOR_MODULES}')
+ACTIVE_FRAME_PROCESSORS = ['DLC.FACE-SWAPPER']  # Initially active processors --'DLC.FACE-ENHANCER'
 MAINTAIN_FPS = False
 
 # FPS calculation
 FPS_WINDOW = 30  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
 
-FRAME_WIDTH = 320
-FRAME_HEIGHT = 240
+FRAME_WIDTH = 320 # 320
+FRAME_HEIGHT = 240 # 240
 WEBSOCKET_TIMEOUT = 60  # Increase timeout to 60 seconds
 
 def time_function(func):
