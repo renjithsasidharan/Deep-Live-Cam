@@ -24,4 +24,3 @@ fastapi==0.100.0
 uvicorn[standard]==0.23.2
 python-multipart==0.0.6
 tkinterdnd2==0.4.2
-customtkinter==5.2.2
