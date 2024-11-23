@@ -5,9 +5,14 @@
 </p>
 
 <p align="center">
+<a href="https://trendshift.io/repositories/11395" target="_blank"><img src="https://trendshift.io/api/badge/repositories/11395" alt="hacksider%2FDeep-Live-Cam | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+</p>
+
+<p align="center">
   <img src="media/demo.gif" alt="Demo GIF">
   <img src="media/avgpcperformancedemo.gif" alt="Performance Demo GIF">
 </p>
+
 
 ## Disclaimer
 
@@ -192,6 +197,9 @@ Track and change faces on the fly.
 It's as simple as opening a movie on the screen, and selecting OBS as your camera!
 ![image](media/movie_img.png)
 
+### Benchmarks
+On Deepware scanner - Most popular deepfake detection website, recording of realtime faceswap ran on an RTX 3060 - 
+![bench](media/deepwarebench.gif)
 
 ## Command Line Arguments
 
