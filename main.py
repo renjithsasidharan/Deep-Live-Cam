@@ -237,6 +237,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         if len(frame_times) > 1:
                             avg_process_time = sum(frame_times) / len(frame_times)
                             fps = 1 / avg_process_time if avg_process_time > 0 else 0
+                            # Send FPS to frontend
+                            try:
+                                await websocket.send_json({"fps": int(fps)})
+                            except Exception as e:
+                                logger.error(f"Error sending FPS data: {e}")
+                            
                             logger.info(
                                 f"Stats: FPS={fps:.1f} (avg_process_time={avg_process_time:.3f}s), "
                                 f"Received={frame_count}, "
