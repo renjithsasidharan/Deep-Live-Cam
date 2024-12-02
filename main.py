@@ -19,7 +19,7 @@ from asyncio import Queue
 import json
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Parse command-line arguments
@@ -27,8 +27,8 @@ parser = argparse.ArgumentParser(description='Deep Live Cam Server')
 parser.add_argument('--execution-provider', type=str, default='cpu',
                     choices=encode_execution_providers(['CPUExecutionProvider', 'CUDAExecutionProvider', 'CoreMLExecutionProvider']),
                     help='Execution provider (default: cpu)')
-parser.add_argument('--source-image', type=str, default='srk.jpg',  
-                    help='Path to the source image (default: srk.jpg)')
+parser.add_argument('--source-image', type=str, default='le.jpg',  
+                    help='Path to the source image (default: le.jpg)')
 parser.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=suggest_execution_threads())
 parser.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=suggest_max_memory())
 args = parser.parse_args()
@@ -77,7 +77,7 @@ ACTIVE_FRAME_PROCESSORS = ['DLC.FACE-SWAPPER']  # Initially active processors --
 MAINTAIN_FPS = False
 
 # FPS calculation
-FPS_WINDOW = 30  # Calculate FPS over this many frames
+FPS_WINDOW = 100  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
 
 FRAME_WIDTH = 320 # 320
@@ -116,7 +116,7 @@ async def process_frame(frame, frame_count):
             start_time = time.time()
             frame = frame_processor.process_frame(CURRENT_SOURCE_IMAGE["face"], frame)
             end_time = time.time()
-            # logger.info(f"{frame_processor.NAME} for frame {frame_count} took {end_time - start_time:.4f} seconds")
+            logger.info(f"{frame_processor.NAME} for frame {frame_count} took {end_time - start_time:.4f} seconds")
     
     return frame
 
@@ -166,7 +166,7 @@ async def websocket_endpoint(websocket: WebSocket):
         frame_times = deque(maxlen=30)  # Store the last 30 frame times for FPS calculation
         frame_queue = Queue(maxsize=1)  # Queue to hold frames
         last_process_time = time.time()
-        MIN_PROCESS_INTERVAL = 0.1  # 10 FPS when not maintaining FPS
+        MIN_PROCESS_INTERVAL = 0.033  # 30 FPS when not maintaining FPS
         MAX_QUEUE_AGE = 0.5  # Drop frames older than 500ms
 
         async def receive_frames():
@@ -205,29 +205,40 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     start_time = time.time()
                     frame, frame_time = await frame_queue.get()
+                    current_time = time.time()  # Get current time after queue.get()
                     
                     # Skip processing if not enough time has passed and not maintaining FPS
                     if not MAINTAIN_FPS:
-                        time_since_last = start_time - last_process_time
+                        time_since_last = current_time - last_process_time
+                        frame_age = current_time - frame_time
+                        logger.debug(f"Frame timing: age={frame_age:.3f}s, time_since_last={time_since_last:.3f}s, last_process_time={last_process_time:.3f}s, current_time={current_time:.3f}s")
                         if time_since_last < MIN_PROCESS_INTERVAL:
                             skipped_count += 1
                             if skipped_count % 30 == 0:  # Log every 30th skip to avoid spam
                                 logger.info(f"Skipped frame - time since last: {time_since_last:.3f}s < {MIN_PROCESS_INTERVAL:.3f}s (Total skipped: {skipped_count})")
                             continue
+                        else:
+                            logger.debug(f"Processing frame - time since last: {time_since_last:.3f}s >= {MIN_PROCESS_INTERVAL:.3f}s")
                     
+                    before_process = time.time()
                     processed_frame = await process_frame(frame, processed_count)
+                    after_process = time.time()
+                    process_duration = after_process - before_process
+                    logger.debug(f"Frame {processed_count} processing duration: {process_duration:.3f}s")
+                    
                     await send_frame(websocket, processed_frame)
                     processed_count += 1
-                    last_process_time = time.time()
+                    last_process_time = before_process  # Set last_process_time to when we started processing
                     
                     # Log processing stats every second
                     end_time = time.time()
-                    frame_times.append(end_time - start_time)
+                    frame_times.append(process_duration)  # Only store the actual processing time
                     if end_time - last_fps_log_time >= 1:
                         if len(frame_times) > 1:
-                            fps = len(frame_times) / sum(frame_times)
+                            avg_process_time = sum(frame_times) / len(frame_times)
+                            fps = 1 / avg_process_time if avg_process_time > 0 else 0
                             logger.info(
-                                f"Stats: FPS={fps:.1f}, "
+                                f"Stats: FPS={fps:.1f} (avg_process_time={avg_process_time:.3f}s), "
                                 f"Received={frame_count}, "
                                 f"Processed={processed_count}, "
                                 f"Skipped={skipped_count}, "
