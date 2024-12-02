@@ -19,7 +19,7 @@ from asyncio import Queue
 import json
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Parse command-line arguments
@@ -80,8 +80,8 @@ MAINTAIN_FPS = False
 FPS_WINDOW = 100  # Calculate FPS over this many frames
 frame_times = deque(maxlen=FPS_WINDOW)
 
-FRAME_WIDTH = 320 # 320
-FRAME_HEIGHT = 240 # 240
+FRAME_WIDTH = 320*2 # 320
+FRAME_HEIGHT = 240*2 # 240
 WEBSOCKET_TIMEOUT = 60  # Increase timeout to 60 seconds
 
 def time_function(func):
@@ -164,10 +164,10 @@ async def websocket_endpoint(websocket: WebSocket):
         processed_count = 0
         skipped_count = 0
         frame_times = deque(maxlen=30)  # Store the last 30 frame times for FPS calculation
-        frame_queue = Queue(maxsize=1)  # Queue to hold frames
+        frame_queue = Queue(maxsize=2)  # Smaller queue to reduce latency
         last_process_time = time.time()
         MIN_PROCESS_INTERVAL = 0.033  # 30 FPS when not maintaining FPS
-        MAX_QUEUE_AGE = 0.5  # Drop frames older than 500ms
+        MAX_QUEUE_AGE = 0.2  # Drop frames older than 200ms for lower latency
 
         async def receive_frames():
             nonlocal frame_count
@@ -206,19 +206,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     start_time = time.time()
                     frame, frame_time = await frame_queue.get()
                     current_time = time.time()  # Get current time after queue.get()
+                    frame_age = current_time - frame_time
+                    
+                    # Skip old frames regardless of MAINTAIN_FPS setting
+                    if frame_age > MAX_QUEUE_AGE:
+                        skipped_count += 1
+                        continue
                     
                     # Skip processing if not enough time has passed and not maintaining FPS
                     if not MAINTAIN_FPS:
                         time_since_last = current_time - last_process_time
-                        frame_age = current_time - frame_time
-                        logger.debug(f"Frame timing: age={frame_age:.3f}s, time_since_last={time_since_last:.3f}s, last_process_time={last_process_time:.3f}s, current_time={current_time:.3f}s")
                         if time_since_last < MIN_PROCESS_INTERVAL:
                             skipped_count += 1
-                            if skipped_count % 30 == 0:  # Log every 30th skip to avoid spam
-                                logger.info(f"Skipped frame - time since last: {time_since_last:.3f}s < {MIN_PROCESS_INTERVAL:.3f}s (Total skipped: {skipped_count})")
+                            if skipped_count % 60 == 0:  # Log every 60th skip to avoid spam
+                                logger.info(f"Total frames skipped: {skipped_count}")
                             continue
-                        else:
-                            logger.debug(f"Processing frame - time since last: {time_since_last:.3f}s >= {MIN_PROCESS_INTERVAL:.3f}s")
                     
                     before_process = time.time()
                     processed_frame = await process_frame(frame, processed_count)
@@ -243,13 +245,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             except Exception as e:
                                 logger.error(f"Error sending FPS data: {e}")
                             
-                            logger.info(
-                                f"Stats: FPS={fps:.1f} (avg_process_time={avg_process_time:.3f}s), "
-                                f"Received={frame_count}, "
-                                f"Processed={processed_count}, "
-                                f"Skipped={skipped_count}, "
-                                f"Queue Size={frame_queue.qsize()}"
-                            )
+                            logger.info(f"Stats: FPS={int(fps)}, Processed={processed_count}")
                         last_fps_log_time = end_time
                         frame_times.clear()
 
