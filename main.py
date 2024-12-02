@@ -89,7 +89,7 @@ def time_function(func):
         start_time = time.time()
         result = await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
         end_time = time.time()
-        logger.info(f"{func.__name__} took {end_time - start_time:.4f} seconds")
+        # logger.info(f"{func.__name__} took {end_time - start_time:.4f} seconds")
         return result
     return wrapper
 
@@ -116,7 +116,7 @@ async def process_frame(frame, frame_count):
             start_time = time.time()
             frame = frame_processor.process_frame(CURRENT_SOURCE_IMAGE["face"], frame)
             end_time = time.time()
-            logger.info(f"{frame_processor.NAME} for frame {frame_count} took {end_time - start_time:.4f} seconds")
+            # logger.info(f"{frame_processor.NAME} for frame {frame_count} took {end_time - start_time:.4f} seconds")
     
     return frame
 
@@ -161,53 +161,80 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.accept()
         logger.info("WebSocket connection accepted")
         frame_count = 0
+        processed_count = 0
+        skipped_count = 0
         frame_times = deque(maxlen=30)  # Store the last 30 frame times for FPS calculation
         frame_queue = Queue(maxsize=1)  # Queue to hold frames
+        last_process_time = time.time()
+        MIN_PROCESS_INTERVAL = 0.1  # 10 FPS when not maintaining FPS
+        MAX_QUEUE_AGE = 0.5  # Drop frames older than 500ms
 
         async def receive_frames():
+            nonlocal frame_count
             while True:
                 try:
                     frame = await receive_frame(websocket)
+                    frame_count += 1
+                    current_time = time.time()
+                    
                     if MAINTAIN_FPS:
-                        await frame_queue.put(frame)
+                        await frame_queue.put((frame, current_time))
                     else:
-                        # If not maintaining FPS, clear the queue and put the latest frame
+                        # Clear old frames
+                        cleared_frames = 0
                         while not frame_queue.empty():
                             try:
-                                frame_queue.get_nowait()
+                                old_frame, old_time = frame_queue.get_nowait()
+                                if current_time - old_time > MAX_QUEUE_AGE:
+                                    logger.debug(f"Dropped frame that was {current_time - old_time:.3f}s old")
+                                cleared_frames += 1
                             except asyncio.QueueEmpty:
                                 break
-                        await frame_queue.put(frame)
+                        
+                        await frame_queue.put((frame, current_time))
+                        if cleared_frames > 0:
+                            logger.debug(f"Cleared {cleared_frames} old frames from queue")
                 except Exception as e:
                     logger.error(f"Error in receive_frames: {e}")
                     break
 
         async def process_frames():
-            nonlocal frame_count
+            nonlocal last_process_time, processed_count, skipped_count
             last_fps_log_time = time.time()
             while True:
                 try:
                     start_time = time.time()
-
-                    frame = await frame_queue.get()
-                    processed_frame = await process_frame(frame, frame_count)
+                    frame, frame_time = await frame_queue.get()
+                    
+                    # Skip processing if not enough time has passed and not maintaining FPS
+                    if not MAINTAIN_FPS:
+                        time_since_last = start_time - last_process_time
+                        if time_since_last < MIN_PROCESS_INTERVAL:
+                            skipped_count += 1
+                            if skipped_count % 30 == 0:  # Log every 30th skip to avoid spam
+                                logger.info(f"Skipped frame - time since last: {time_since_last:.3f}s < {MIN_PROCESS_INTERVAL:.3f}s (Total skipped: {skipped_count})")
+                            continue
+                    
+                    processed_frame = await process_frame(frame, processed_count)
                     await send_frame(websocket, processed_frame)
-                    frame_count += 1
-
-                    # Calculate and log FPS
+                    processed_count += 1
+                    last_process_time = time.time()
+                    
+                    # Log processing stats every second
                     end_time = time.time()
                     frame_times.append(end_time - start_time)
-                    if end_time - last_fps_log_time >= 1:  # Send FPS every second
+                    if end_time - last_fps_log_time >= 1:
                         if len(frame_times) > 1:
                             fps = len(frame_times) / sum(frame_times)
-                            logger.info(f"Processed {frame_count} frames. Current FPS: {fps:.2f}")
-                            # Send FPS to frontend
-                            await websocket.send_text(json.dumps({"fps": round(fps, 2)}))
+                            logger.info(
+                                f"Stats: FPS={fps:.1f}, "
+                                f"Received={frame_count}, "
+                                f"Processed={processed_count}, "
+                                f"Skipped={skipped_count}, "
+                                f"Queue Size={frame_queue.qsize()}"
+                            )
                         last_fps_log_time = end_time
                         frame_times.clear()
-
-                    if not MAINTAIN_FPS:
-                        await asyncio.sleep(0.1)  # Add a small delay when not maintaining FPS
 
                 except Exception as e:
                     logger.error(f"Error in process_frames: {e}")
@@ -232,7 +259,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket connection error: {e}")
     finally:
-        logger.info("WebSocket connection closed")
+        logger.info(f"WebSocket connection closed. Final stats: Received={frame_count}, Processed={processed_count}, Skipped={skipped_count}")
 
 # Update FastAPI app configuration
 app.add_middleware(
@@ -275,5 +302,3 @@ async def set_source_image(file: UploadFile = File(...)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=WEBSOCKET_TIMEOUT)
-
-# python main.py --execution-provider cuda
